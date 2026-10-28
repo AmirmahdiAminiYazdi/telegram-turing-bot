@@ -22,18 +22,21 @@ def support(has_username: bool) -> Kb:
     return b.as_markup()
 
 
-def catalog(products: list[dict]) -> Kb:
+def catalog(products: list[dict], labels: dict[int, str] | None = None) -> Kb:
     b = InlineKeyboardBuilder()
     for p in products:
-        b.row(Btn(text=f"{p['title']} — {fmt_price(p['price'])} ت",
-                  callback_data=f"p:{p['id']}"))
+        label = (labels or {}).get(p["id"]) or f"{p['title']} — {fmt_price(p['price'])} ت"
+        b.row(Btn(text=label, callback_data=f"p:{p['id']}"))
     b.row(Btn(text="⬅️ منو", callback_data="menu"))
     return b.as_markup()
 
 
-def product(product_id: int) -> Kb:
+def product(product_id: int, available: bool = True) -> Kb:
     b = InlineKeyboardBuilder()
-    b.row(Btn(text="🛒 خرید", callback_data=f"buy:{product_id}"))
+    if available:
+        b.row(Btn(text="🛒 خرید و دریافت دسترسی", callback_data=f"buy:{product_id}"))
+    else:
+        b.row(Btn(text="💬 اطلاع از ظرفیت بعدی", callback_data="support"))
     b.row(Btn(text="⬅️ دوره‌ها", callback_data="catalog"))
     return b.as_markup()
 
@@ -122,6 +125,11 @@ def admin_product(p: dict) -> Kb:
     b.row(Btn(text="✏️ قیمت", callback_data=f"adm:ed:price:{p['id']}"),
           Btn(text="✏️ کانال", callback_data=f"adm:ed:channel_id:{p['id']}"),
           Btn(text="✏️ متن دسترسی", callback_data=f"adm:ed:access_text:{p['id']}"))
+    b.row(Btn(text="🖼 کاور", callback_data=f"adm:ed:cover_file_id:{p['id']}"),
+          Btn(text="✅ مزایا", callback_data=f"adm:ed:features:{p['id']}"),
+          Btn(text="🛡 ضمانت", callback_data=f"adm:ed:guarantee:{p['id']}"))
+    b.row(Btn(text="👀 پیش‌نمایش", callback_data=f"adm:ed:preview_url:{p['id']}"),
+          Btn(text="💺 ظرفیت", callback_data=f"adm:ed:seats:{p['id']}"))
     b.row(Btn(text="⬅️ برگشت", callback_data="adm:products"))
     return b.as_markup()
 
@@ -134,3 +142,8 @@ def admin_products(products: list[dict]) -> Kb:
                   callback_data=f"adm:p:{p['id']}"))
     b.row(Btn(text="⬅️ پنل", callback_data="adm:menu"))
     return b.as_markup()
+
+
+def rating(order_id: int) -> Kb:
+    return Kb(inline_keyboard=[[
+        Btn(text="⭐" * n, callback_data=f"rate:{order_id}:{n}") for n in (1, 2, 3, 4, 5)]])

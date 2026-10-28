@@ -4,6 +4,7 @@ import logging
 import secrets
 
 from aiogram import Bot
+from aiogram.types import InlineKeyboardButton as Btn, InlineKeyboardMarkup as Kb
 
 from bot import texts
 from bot.config import Settings
@@ -33,7 +34,33 @@ async def complete_order(bot: Bot, db: Database, settings: Settings, order_id: i
         log.exception("delivery failed for order %s", order_id)
     if order["amount"] > 0:
         await _reward_referrer(bot, db, order["user_id"])
+        await _loyalty_offer(bot, db, order)
     return True
+
+
+LOYALTY_DEFAULT_PERCENT = 10
+LOYALTY_CODE_DAYS = 7
+
+
+async def _loyalty_offer(bot: Bot, db: Database, order: dict) -> None:
+    """بعد از خرید، برای دوره‌ی دیگری که هنوز نخریده، یک تخفیف شخصی با انقضای واقعی."""
+    percent = int(await db.get_setting("loyalty_percent", str(LOYALTY_DEFAULT_PERCENT)))
+    if percent <= 0:
+        return
+    owned = {o["product_id"] for o in await db.user_paid_orders(order["user_id"])}
+    others = [p for p in await db.list_products() if p["id"] not in owned]
+    if not others:
+        return
+    code = f"VIP-{secrets.token_hex(3).upper()}"
+    await db.create_discount(code, "percent", min(percent, 100), max_uses=1,
+                             days=LOYALTY_CODE_DAYS, owner_id=order["user_id"])
+    try:
+        await bot.send_message(
+            order["user_id"],
+            texts.LOYALTY.format(percent=percent, code=code, days=LOYALTY_CODE_DAYS),
+            reply_markup=Kb(inline_keyboard=[[Btn(text="📚 دیدن دوره‌ها", callback_data="catalog")]]))
+    except Exception:
+        log.exception("loyalty offer notify failed")
 
 
 async def _reward_referrer(bot: Bot, db: Database, referee_id: int) -> None:

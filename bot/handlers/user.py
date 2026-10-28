@@ -12,7 +12,7 @@ from bot import keyboards as kb
 from bot import texts
 from bot.config import Settings
 from bot.db import Database
-from bot.services import discounts
+from bot.services import cards, discounts
 from bot.services.delivery import deliver
 from bot.services.fulfillment import complete_order
 from bot.services.zarinpal import Zarinpal, ZarinpalError
@@ -26,23 +26,56 @@ ONLINE_MIN_TOMAN = 1000  # حداقل مبلغ زرین‌پال
 
 # ---------- کمکی‌ها ----------
 def _card_text(p: dict, price: int | None = None, code: str | None = None) -> str:
-    text = texts.PRODUCT_CARD.format(
-        title=escape(p["title"]), description=escape(p["description"]),
-        price=kb.fmt_price(p["price"]))
-    if code and price is not None:
-        text += "\n\n" + texts.DISCOUNT_OK.format(
-            old=kb.fmt_price(p["price"]), new=kb.fmt_price(price))
-    return text
+    limit = cards.CAPTION_LIMIT if p.get("cover_file_id") else None
+    return cards.product_card(p, final_price=price if code else None, limit=limit)
 
 
-async def _show_product(msg: Message, db: Database, product_id: int, edit: bool) -> None:
+async def render(cb: CallbackQuery, text: str, reply_markup=None,
+                 photo: str | None = None, **kw) -> None:
+    """ویرایش پیام کالبک؛ اگر پیام فعلی عکس است یا عکس می‌خواهیم، پیام جایگزین می‌شود."""
+    msg = cb.message
+    if photo or msg.photo:
+        try:
+            await msg.delete()
+        except Exception:
+            pass
+        if photo:
+            await msg.answer_photo(photo, caption=text, reply_markup=reply_markup)
+        else:
+            await msg.answer(text, reply_markup=reply_markup, **kw)
+        return
+    await msg.edit_text(text, reply_markup=reply_markup, **kw)
+
+
+async def _product_view(db: Database, product_id: int):
     p = await db.get_product(product_id)
     if not p or not p["active"]:
+        return None
+    markup = kb.product(p["id"], available=not cards.sold_out(p))
+    return p, _card_text(p), markup
+
+
+async def _show_product(msg: Message, db: Database, product_id: int) -> None:
+    view = await _product_view(db, product_id)
+    if not view:
         await msg.answer(texts.NO_PRODUCTS)
         return
-    text, markup = _card_text(p), kb.product(p["id"])
-    await (msg.edit_text(text, reply_markup=markup) if edit
-           else msg.answer(text, reply_markup=markup))
+    p, text, markup = view
+    if p.get("cover_file_id"):
+        await msg.answer_photo(p["cover_file_id"], caption=text, reply_markup=markup)
+    else:
+        await msg.answer(text, reply_markup=markup)
+
+
+async def _welcome(db: Database, name: str) -> str:
+    text = texts.WELCOME_V2.format(name=escape(name))
+    best = await db.bestseller(cards.MIN_SOLD_SHOWN)
+    if best:
+        text += texts.WELCOME_BEST.format(title=escape(best["title"]))
+    buyers = await db.total_buyers()
+    if buyers >= cards.MIN_SOLD_SHOWN:
+        text += texts.WELCOME_PROOF.format(n=buyers)
+    return text
 
 
 async def _discount_for(state: FSMContext, db: Database, product: dict,
@@ -63,6 +96,9 @@ async def _create_order(cb: CallbackQuery, state: FSMContext, db: Database,
                         settings: Settings, bot: Bot, product: dict,
                         method: str) -> tuple[int, int] | None:
     """(order_id, amount) یا None (با پیام خطا). تخفیف را اتمیک رزرو می‌کند."""
+    if cards.sold_out(product):
+        await cb.answer(texts.SOLD_OUT, show_alert=True)
+        return None
     d, amount = await _discount_for(state, db, product, cb.from_user.id)
     if method == "zarinpal" and 0 < amount < ONLINE_MIN_TOMAN:
         await cb.answer(texts.ONLINE_MIN, show_alert=True)
@@ -75,7 +111,7 @@ async def _create_order(cb: CallbackQuery, state: FSMContext, db: Database,
     order_id = await db.create_order(cb.from_user.id, product, method, amount, code)
     await state.update_data(discount_code=None, discount_product=None)
     if amount == 0:  # تخفیف ۱۰۰٪
-        await cb.message.edit_text(texts.FREE_ORDER.format(order_id=order_id))
+        await render(cb, texts.FREE_ORDER.format(order_id=order_id))
         await complete_order(bot, db, settings, order_id)
         await cb.answer()
         return None
@@ -93,10 +129,9 @@ async def start(message: Message, command: CommandObject, db: Database,
     if is_new and payload.startswith("ref_") and payload[4:].isdigit():
         await db.add_referral(u.id, int(payload[4:]))
     if payload.startswith("p_") and payload[2:].isdigit():  # لینک مستقیم به دوره
-        await _show_product(message, db, int(payload[2:]), edit=False)
+        await _show_product(message, db, int(payload[2:]))
         return
-    await message.answer(texts.WELCOME.format(name=escape(u.first_name)),
-                         reply_markup=kb.main_menu())
+    await message.answer(await _welcome(db, u.first_name), reply_markup=kb.main_menu())
 
 
 @router.message(Command("cancel"), StateFilter("*"))
@@ -111,11 +146,9 @@ async def help_(message: Message) -> None:
 
 
 @router.callback_query(F.data.in_({"menu", "fs:check"}))
-async def menu(cb: CallbackQuery, state: FSMContext) -> None:
+async def menu(cb: CallbackQuery, state: FSMContext, db: Database) -> None:
     await state.clear()
-    await cb.message.edit_text(
-        texts.WELCOME.format(name=escape(cb.from_user.first_name)),
-        reply_markup=kb.main_menu())
+    await render(cb, await _welcome(db, cb.from_user.first_name), kb.main_menu())
     await cb.answer()
 
 
@@ -123,15 +156,22 @@ async def menu(cb: CallbackQuery, state: FSMContext) -> None:
 async def catalog(cb: CallbackQuery, db: Database) -> None:
     products = await db.list_products()
     if not products:
-        await cb.message.edit_text(texts.NO_PRODUCTS, reply_markup=kb.main_menu())
+        await render(cb, texts.NO_PRODUCTS, kb.main_menu())
     else:
-        await cb.message.edit_text(texts.CATALOG_TITLE, reply_markup=kb.catalog(products))
+        best = await db.bestseller(cards.MIN_SOLD_SHOWN)
+        labels = {p["id"]: cards.catalog_label(p, best["id"] if best else None) for p in products}
+        await render(cb, texts.CATALOG_TITLE, kb.catalog(products, labels))
     await cb.answer()
 
 
 @router.callback_query(F.data.regexp(r"^p:\d+$"))
 async def product(cb: CallbackQuery, db: Database) -> None:
-    await _show_product(cb.message, db, int(cb.data.split(":")[1]), edit=True)
+    view = await _product_view(db, int(cb.data.split(":")[1]))
+    if not view:
+        await cb.answer(texts.NO_PRODUCTS, show_alert=True)
+        return
+    p, text, markup = view
+    await render(cb, text, markup, photo=p.get("cover_file_id"))
     await cb.answer()
 
 
@@ -145,6 +185,9 @@ async def buy(cb: CallbackQuery, db: Database, settings: Settings, bot: Bot,
         await cb.answer(texts.NO_PRODUCTS, show_alert=True)
         return
     owned = await db.paid_order(cb.from_user.id, product_id)
+    if not owned and cards.sold_out(p):
+        await cb.answer(texts.SOLD_OUT, show_alert=True)
+        return
     if owned:
         await cb.message.answer(texts.ALREADY_OWNED)
         await deliver(bot, db, owned, settings.admin_ids)
@@ -154,8 +197,8 @@ async def buy(cb: CallbackQuery, db: Database, settings: Settings, bot: Bot,
         await cb.answer(texts.NO_METHODS, show_alert=True)
         return
     d, price = await _discount_for(state, db, p, cb.from_user.id)
-    await cb.message.edit_text(
-        _card_text(p, price, d["code"] if d else None) + "\n\n" + texts.CHOOSE_METHOD,
+    await render(
+        cb, _card_text(p, price, d["code"] if d else None) + "\n\n" + texts.CHOOSE_METHOD,
         reply_markup=kb.methods(product_id, settings.zarinpal_enabled, settings.card_enabled))
     await cb.answer()
 
@@ -212,8 +255,7 @@ async def pay_online(cb: CallbackQuery, db: Database, settings: Settings, bot: B
         await cb.answer(texts.ZARINPAL_FAIL, show_alert=True)
         return
     await db.set_authority(order_id, authority)
-    await cb.message.edit_text(texts.ZARINPAL_PAY.format(order_id=order_id),
-                               reply_markup=kb.pay_link(url))
+    await render(cb, texts.ZARINPAL_PAY.format(order_id=order_id), kb.pay_link(url))
     await cb.answer()
 
 
@@ -232,7 +274,7 @@ async def pay_card(cb: CallbackQuery, db: Database, settings: Settings, bot: Bot
         return
     order_id, amount = created
     holder = f"به نام {escape(settings.card_holder)}" if settings.card_holder else ""
-    await cb.message.edit_text(texts.CARD_INFO.format(
+    await render(cb, texts.CARD_INFO.format(
         order_id=order_id, price=kb.fmt_price(amount),
         card=escape(settings.card_number), holder=holder))
     await cb.answer()
@@ -243,7 +285,7 @@ async def pay_card(cb: CallbackQuery, db: Database, settings: Settings, bot: Bot
 async def support(cb: CallbackQuery, settings: Settings) -> None:
     text = (texts.SUPPORT.format(username=settings.support_username)
             if settings.support_username else texts.SUPPORT_NONE)
-    await cb.message.edit_text(text, reply_markup=kb.support(bool(settings.support_username)))
+    await render(cb, text, kb.support(bool(settings.support_username)))
     await cb.answer()
 
 
@@ -275,10 +317,10 @@ async def support_send(message: Message, bot: Bot, db: Database, settings: Setti
 async def referral(cb: CallbackQuery, db: Database, bot: Bot) -> None:
     username = (await bot.me()).username
     stats = await db.referral_stats(cb.from_user.id)
-    await cb.message.edit_text(
-        texts.REFERRAL_INFO.format(
+    await render(
+        cb, texts.REFERRAL_INFO.format(
             link=f"https://t.me/{username}?start=ref_{cb.from_user.id}", **stats),
-        reply_markup=kb.main_menu(), disable_web_page_preview=True)
+        kb.main_menu(), disable_web_page_preview=True)
     await cb.answer()
 
 
@@ -313,9 +355,9 @@ async def receipt(message: Message, db: Database, settings: Settings, bot: Bot) 
 async def mine(cb: CallbackQuery, db: Database) -> None:
     orders = await db.user_paid_orders(cb.from_user.id)
     if not orders:
-        await cb.message.edit_text(texts.MY_COURSES_EMPTY, reply_markup=kb.main_menu())
+        await render(cb, texts.MY_COURSES_EMPTY, kb.main_menu())
     else:
-        await cb.message.edit_text(texts.MY_COURSES, reply_markup=kb.mine(orders))
+        await render(cb, texts.MY_COURSES, kb.mine(orders))
     await cb.answer()
 
 
@@ -326,4 +368,22 @@ async def again(cb: CallbackQuery, db: Database, settings: Settings, bot: Bot) -
         await cb.answer()
         return
     await deliver(bot, db, order, settings.admin_ids)
+    await cb.answer()
+
+
+# ---------- امتیاز بعد از خرید ----------
+@router.callback_query(F.data.regexp(r"^rate:\d+:[1-5]$"))
+async def rate(cb: CallbackQuery, db: Database) -> None:
+    _, order_id, stars = cb.data.split(":")
+    order = await db.get_order(int(order_id))
+    if not order or order["user_id"] != cb.from_user.id:
+        await cb.answer()
+        return
+    if not await db.add_rating(order["id"], int(stars)):
+        await cb.answer(texts.RATE_DONE, show_alert=True)
+        return
+    text = texts.RATE_THANKS.format(stars="⭐" * int(stars))
+    if int(stars) <= 2:
+        text += "\n" + texts.RATE_LOW
+    await render(cb, text, kb.main_menu())
     await cb.answer()

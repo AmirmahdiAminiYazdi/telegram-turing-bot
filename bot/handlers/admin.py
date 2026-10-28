@@ -75,8 +75,17 @@ async def _show_product(cb: CallbackQuery, db: Database, pid: int) -> None:
         await cb.answer("پیدا نشد", show_alert=True)
         return
     free = await db.free_codes_count(pid)
-    text = (f"<b>{escape(p['title'])}</b>\nقیمت: {kb.fmt_price(p['price'])} تومان\n"
+    capacity = ('نامحدود' if p['seats'] is None
+                else f"{p['seats_left']} از {p['seats']} باقی")
+    sale = (f"\nحراج: {kb.fmt_price(p['price'])} (قیمت اصلی {kb.fmt_price(p['list_price'])})"
+            if p["on_sale"] else "")
+    rating = f"{p['rating']} از {p['rating_count']} نظر" if p["rating_count"] else "—"
+    text = (f"<b>{escape(p['title'])}</b>\nقیمت: {kb.fmt_price(p['list_price'])} تومان{sale}\n"
             f"کانال: {p['channel_id'] or '—'}\nکد آزاد: {free}\n"
+            f"فروش: {p['sold']} | امتیاز: {rating}\n"
+            f"ظرفیت: {capacity}\n"
+            f"کاور: {'دارد' if p['cover_file_id'] else '—'} | مزایا: {'دارد' if p['features'] else '—'}"
+            f" | ضمانت: {'دارد' if p['guarantee'] else '—'}\n"
             f"وضعیت: {'فعال' if p['active'] else 'غیرفعال'}")
     await cb.message.edit_text(text, reply_markup=kb.admin_product(p))
     await cb.answer()

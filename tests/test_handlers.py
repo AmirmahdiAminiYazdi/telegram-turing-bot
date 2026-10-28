@@ -217,7 +217,7 @@ async def test_force_sub_blocks_non_members_and_lets_members_in(ctx):
 
     ctx.bot.member_status = "member"
     await tap(ctx, BUYER, "fs:check")
-    assert any("خوش آمدی" in t for t in ctx.bot.texts(BUYER))
+    assert any("دوره را انتخاب کن" in t for t in ctx.bot.texts(BUYER))
     await say(ctx, ADMIN, "/start")  # ادمین هرگز قفل نمی‌شود
     ctx.bot.member_status = "left"
     await say(ctx, ADMIN, "/admin")
@@ -248,3 +248,52 @@ async def test_admin_set_command_validates(ctx):
     assert await ctx.db.get_setting("referral_percent") == "25"
     await say(ctx, ADMIN, "/set force_channel @abc")
     assert await ctx.db.get_setting("force_channel") == "@abc"
+
+
+async def test_cover_photo_card_and_sold_out_block(ctx):
+    pid = await _product(ctx)
+    await ctx.db.update_product(pid, "cover_file_id", "COVER")
+    await ctx.db.update_product(pid, "seats", 1)
+    await say(ctx, BUYER, "/start")
+    await tap(ctx, BUYER, f"p:{pid}")
+    assert any(n == "SendPhoto" and p["photo"] == "COVER" and "جای خالی" in p["caption"]
+               for n, p in ctx.bot.calls)
+
+    other = 55
+    await ctx.db.upsert_user(other, None, "o")
+    await ctx.db.mark_paid(await ctx.db.create_order(other, await ctx.db.get_product(pid), "card"))
+    await tap(ctx, BUYER, f"buy:{pid}")
+    assert any("تکمیل" in a for a in ctx.bot.alerts())
+    assert not any("روش پرداخت" in t for t in ctx.bot.texts(BUYER))
+
+
+async def test_rating_callback_flow(ctx):
+    pid = await _product(ctx)
+    await ctx.db.upsert_user(BUYER, None, "b")
+    oid = await ctx.db.create_order(BUYER, await ctx.db.get_product(pid), "card")
+    await ctx.db.mark_paid(oid)
+    await tap(ctx, BUYER, f"rate:{oid}:2")
+    assert any("پشتیبانی" in t for t in ctx.bot.texts(BUYER))  # امتیاز پایین، مسیر پیگیری
+    await tap(ctx, BUYER, f"rate:{oid}:5")
+    assert any("قبلاً امتیاز" in a for a in ctx.bot.alerts())
+    await tap(ctx, 12345, f"rate:{oid}:5")  # سفارش دیگران
+    assert (await ctx.db.get_product(pid))["rating_count"] == 1
+
+
+async def test_sale_and_edit_commands(ctx):
+    pid = await _product(ctx, 900_000)
+    await say(ctx, ADMIN, f"/sale {pid} 1000000 24")
+    assert (await ctx.db.get_product(pid))["on_sale"] == 0  # بالاتر از قیمت اصلی رد می‌شود
+    await say(ctx, ADMIN, f"/sale {pid} 600000 24")
+    assert (await ctx.db.get_product(pid))["price"] == 600_000
+    await say(ctx, ADMIN, f"/sale {pid} off")
+    assert (await ctx.db.get_product(pid))["price"] == 900_000
+
+    await tap(ctx, ADMIN, f"adm:ed:seats:{pid}")
+    await say(ctx, ADMIN, "۲۰")
+    assert (await ctx.db.get_product(pid))["seats"] == 20
+    await tap(ctx, ADMIN, f"adm:ed:features:{pid}")
+    await say(ctx, ADMIN, "پروژه واقعی\nپشتیبانی ۳ ماهه")
+    assert "پروژه واقعی" in (await ctx.db.get_product(pid))["features"]
+    await tap(ctx, ADMIN, f"adm:p:{pid}")
+    assert any("باقی" in t and "فروش" in t for t in ctx.bot.texts(ADMIN))

@@ -5,6 +5,7 @@ from html import escape
 
 from aiogram import Bot
 
+from bot import texts
 from bot.db import Database
 
 log = logging.getLogger(__name__)
@@ -41,6 +42,8 @@ async def build_access_message(bot: Bot, db: Database, order: dict,
 
     if len(parts) == 1:
         parts.append("جزئیات دسترسی توسط پشتیبانی برایتان ارسال می‌شود.")
+    else:
+        parts.append(texts.POST_PURCHASE.strip())
     return "\n\n".join(parts)
 
 

@@ -25,7 +25,7 @@ router = Router(name="admin_more")
 router.message.filter(IsAdmin())
 router.callback_query.filter(IsAdmin())
 
-SETTING_KEYS = {"force_channel", "force_channel_link", "referral_percent"}
+SETTING_KEYS = {"force_channel", "force_channel_link", "referral_percent", "loyalty_percent"}
 _DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
 
 
@@ -126,8 +126,16 @@ async def edit_start(cb: CallbackQuery, state: FSMContext) -> None:
     _, _, field, pid = cb.data.split(":")
     await state.set_state(EditProduct.value)
     await state.update_data(field=field, product_id=int(pid))
-    hint = {"price": "قیمت جدید (تومان)", "channel_id": "آیدی عددی کانال (یا - برای حذف)",
-            "access_text": "متن دسترسی (یا - برای حذف)"}.get(field, "مقدار جدید")
+    hint = {
+        "price": "قیمت جدید (تومان)", "channel_id": "آیدی عددی کانال (یا - برای حذف)",
+        "access_text": "متن دسترسی (یا - برای حذف)",
+        "cover_file_id": "یک عکس بفرست تا کاور دوره شود (یا - برای حذف)",
+        "features": "مزایا را بفرست، هر مزیت در یک خط، حداکثر ۸ خط (یا - برای حذف)",
+        "guarantee": "متن ضمانت، مثلاً «ضمانت بازگشت وجه ۷ روزه» (یا - برای حذف). "
+                     "فقط چیزی بنویس که واقعاً به آن عمل می‌کنی",
+        "preview_url": "لینک پیش‌نمایش/نمونه جلسه (یا - برای حذف)",
+        "seats": "ظرفیت کل دوره (عدد) یا - برای نامحدود. فقط اگر محدودیت واقعی دارد",
+    }.get(field, "مقدار جدید")
     await cb.message.answer(f"{hint}؟ (/cancel)")
     await cb.answer()
 
@@ -150,11 +158,54 @@ async def edit_save(message: Message, state: FSMContext, db: Database) -> None:
             except ValueError:
                 await message.answer("آیدی عددی نیست.")
                 return
-    elif field == "access_text" and raw == "-":
+    elif field == "seats":
+        value = None if raw == "-" else to_int(raw)
+        if raw != "-" and not value:
+            await message.answer("عدد مثبت یا - بفرست.")
+            return
+    elif field == "cover_file_id":
+        if raw != "-":
+            await message.answer("عکس بفرست یا - برای حذف.")
+            return
+        value = None
+    elif raw == "-":
         value = None
     await db.update_product(d["product_id"], field, value)
     await state.clear()
     await message.answer("✅ ذخیره شد.", reply_markup=kb.admin_menu())
+
+
+@router.message(EditProduct.value, F.photo)
+async def edit_cover(message: Message, state: FSMContext, db: Database) -> None:
+    d = await state.get_data()
+    if d["field"] != "cover_file_id":
+        await message.answer("برای این فیلد متن بفرست.")
+        return
+    await db.update_product(d["product_id"], "cover_file_id", message.photo[-1].file_id)
+    await state.clear()
+    await message.answer("✅ کاور ذخیره شد.", reply_markup=kb.admin_menu())
+
+
+@router.message(Command("sale"))
+async def sale_cmd(message: Message, db: Database) -> None:
+    """/sale <id> <قیمت> <ساعت>  یا  /sale <id> off  (پایان خودکار؛ بعد از مهلت قیمت اصلی برمی‌گردد)"""
+    parts = (message.text or "").split()[1:]
+    usage = "استفاده:\n<code>/sale 3 450000 48</code> (قیمت ویژه ۴۸ ساعته)\n<code>/sale 3 off</code>"
+    pid = to_int(parts[0]) if parts else None
+    product = await db.get_product(pid) if pid else None
+    if not product or len(parts) < 2:
+        await message.answer(usage)
+        return
+    if parts[1] == "off":
+        await db.set_sale(product["id"], None, None)
+        await message.answer("حراج پایان یافت.")
+        return
+    price, hours = to_int(parts[1]), to_int(parts[2]) if len(parts) > 2 else None
+    if not price or not hours or price >= product["list_price"]:
+        await message.answer("قیمت ویژه باید کمتر از قیمت اصلی باشد و مدت (ساعت) را هم بده.\n" + usage)
+        return
+    await db.set_sale(product["id"], price, hours)
+    await message.answer(f"✅ قیمت ویژه {price:,} تومان تا {hours} ساعت دیگر فعال شد.")
 
 
 # ---------- سفارش‌ها ----------
@@ -265,7 +316,7 @@ async def set_cmd(message: Message, db: Database) -> None:
     key, value = parts[1], parts[2].strip()
     if value == "-":
         value = ""
-    if key == "referral_percent" and value and not (value.isdigit() and 0 <= int(value) <= 100):
+    if key in {"referral_percent", "loyalty_percent"} and value and not (value.isdigit() and 0 <= int(value) <= 100):
         await message.answer("عدد ۰ تا ۱۰۰ بفرست.")
         return
     await db.set_setting(key, value)

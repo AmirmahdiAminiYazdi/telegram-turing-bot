@@ -7,6 +7,7 @@ from html import escape
 from aiogram import Bot
 from aiogram.types import InlineKeyboardButton as Btn, InlineKeyboardMarkup as Kb
 
+from bot import keyboards as kb
 from bot import texts
 from bot.db import Database
 
@@ -30,10 +31,26 @@ async def send_reminders(bot: Bot, db: Database) -> int:
     return sent
 
 
+async def send_rating_requests(bot: Bot, db: Database) -> int:
+    """۳ روز بعد از خرید، یک‌بار امتیاز می‌گیرد (فقط خریدهای پولی)."""
+    sent = 0
+    for o in await db.due_rating_requests():
+        await db.mark_rate_asked(o["id"])
+        try:
+            await bot.send_message(o["user_id"], texts.RATE_ASK.format(title=escape(o["title"])),
+                                   reply_markup=kb.rating(o["id"]))
+            sent += 1
+        except Exception:
+            log.info("rating request to %s failed", o["user_id"])
+        await asyncio.sleep(0.05)
+    return sent
+
+
 async def reminder_loop(bot: Bot, db: Database, interval: int = 600) -> None:
     while True:
         try:
             await send_reminders(bot, db)
+            await send_rating_requests(bot, db)
         except Exception:
             log.exception("reminder loop error")
         await asyncio.sleep(interval)

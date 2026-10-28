@@ -77,7 +77,46 @@ CREATE TABLE IF NOT EXISTS support_map (
 );
 """
 
-MIGRATIONS = {1: SCHEMA_V1, 2: SCHEMA_V2}
+SCHEMA_V3 = """
+ALTER TABLE products ADD COLUMN cover_file_id TEXT;
+ALTER TABLE products ADD COLUMN features TEXT;       -- هر خط یک مزیت
+ALTER TABLE products ADD COLUMN guarantee TEXT;
+ALTER TABLE products ADD COLUMN preview_url TEXT;
+ALTER TABLE products ADD COLUMN seats INTEGER;       -- NULL = ظرفیت نامحدود
+ALTER TABLE products ADD COLUMN sale_price INTEGER;
+ALTER TABLE products ADD COLUMN sale_ends_at TEXT;   -- UTC؛ بعد از آن قیمت خودکار برمی‌گردد
+ALTER TABLE orders ADD COLUMN rate_asked INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE IF NOT EXISTS ratings (
+    order_id INTEGER PRIMARY KEY,
+    product_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    stars INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+MIGRATIONS = {1: SCHEMA_V1, 2: SCHEMA_V2, 3: SCHEMA_V3}
+
+# فیلدهای محاسبه‌شده: فروش واقعی، امتیاز واقعی و حراج فعال. هیچ عددی ساختگی نیست.
+PRODUCT_SELECT = """
+SELECT p.*,
+  (SELECT COUNT(*) FROM orders o WHERE o.product_id=p.id AND o.status='paid') AS sold,
+  (SELECT ROUND(AVG(stars),1) FROM ratings r WHERE r.product_id=p.id) AS rating,
+  (SELECT COUNT(*) FROM ratings r WHERE r.product_id=p.id) AS rating_count,
+  CASE WHEN p.sale_price IS NOT NULL AND p.sale_ends_at > datetime('now') THEN 1 ELSE 0 END AS on_sale,
+  CAST(strftime('%s', p.sale_ends_at) - strftime('%s', 'now') AS INTEGER) AS sale_left
+FROM products p"""
+
+
+def _decorate(p: dict[str, Any] | None) -> dict[str, Any] | None:
+    """price = قیمت مؤثر (حراج در صورت فعال بودن)، list_price = قیمت اصلی."""
+    if p is None:
+        return None
+    p["list_price"] = p["price"]
+    if p["on_sale"]:
+        p["price"] = p["sale_price"]
+    p["seats_left"] = None if p["seats"] is None else max(p["seats"] - p["sold"], 0)
+    return p
 
 
 class Database:
@@ -153,13 +192,50 @@ class Database:
         return cur.lastrowid
 
     async def get_product(self, product_id: int) -> dict[str, Any] | None:
-        return await self._one("SELECT * FROM products WHERE id=?", (product_id,))
+        return _decorate(await self._one(PRODUCT_SELECT + " WHERE p.id=?", (product_id,)))
 
     async def list_products(self, only_active: bool = True) -> list[dict[str, Any]]:
-        sql = "SELECT * FROM products"
-        if only_active:
-            sql += " WHERE active=1"
-        return await self._all(sql + " ORDER BY id")
+        sql = PRODUCT_SELECT + (" WHERE p.active=1" if only_active else "")
+        return [_decorate(p) for p in await self._all(sql + " ORDER BY p.id")]
+
+    async def bestseller(self, min_sold: int = 5) -> dict[str, Any] | None:
+        """پرفروش‌ترین دوره‌ی فعال؛ فقط وقتی فروش واقعی به حداقل برسد."""
+        items = [p for p in await self.list_products() if p["sold"] >= min_sold]
+        return max(items, key=lambda p: p["sold"]) if items else None
+
+    async def set_sale(self, product_id: int, price: int | None, hours: int | None) -> None:
+        if price is None:
+            await self._exec("UPDATE products SET sale_price=NULL, sale_ends_at=NULL WHERE id=?",
+                             (product_id,))
+        else:
+            await self._exec(
+                "UPDATE products SET sale_price=?, sale_ends_at=datetime('now', ?) WHERE id=?",
+                (price, f"+{int(hours)} hours", product_id))
+
+    async def total_buyers(self) -> int:
+        row = await self._one("SELECT COUNT(DISTINCT user_id) AS n FROM orders WHERE status='paid'")
+        return row["n"]
+
+    # ---- ratings ----
+    async def add_rating(self, order_id: int, stars: int) -> bool:
+        o = await self.get_order(order_id)
+        if not o or o["status"] != "paid" or not 1 <= stars <= 5:
+            return False
+        cur = await self._exec(
+            "INSERT OR IGNORE INTO ratings(order_id, product_id, user_id, stars) VALUES(?,?,?,?)",
+            (order_id, o["product_id"], o["user_id"], stars))
+        return cur.rowcount == 1
+
+    async def due_rating_requests(self, after_days: int = 3) -> list[dict[str, Any]]:
+        return await self._all(
+            "SELECT o.*, p.title FROM orders o JOIN products p ON p.id=o.product_id"
+            " WHERE o.status='paid' AND o.rate_asked=0 AND o.amount > 0"
+            " AND o.paid_at <= datetime('now', ?)"
+            " AND NOT EXISTS (SELECT 1 FROM ratings r WHERE r.order_id=o.id)",
+            (f"-{after_days} days",))
+
+    async def mark_rate_asked(self, order_id: int) -> None:
+        await self._exec("UPDATE orders SET rate_asked=1 WHERE id=?", (order_id,))
 
     async def toggle_product(self, product_id: int) -> None:
         await self._exec("UPDATE products SET active = 1 - active WHERE id=?",
@@ -213,7 +289,7 @@ class Database:
             "INSERT INTO orders(user_id, product_id, amount, original_amount, method,"
             " discount_code) VALUES(?,?,?,?,?,?)",
             (user_id, product["id"], product["price"] if amount is None else amount,
-             product["price"], method, discount_code),
+             product.get("list_price", product["price"]), method, discount_code),
         )
         return cur.lastrowid
 
@@ -418,6 +494,7 @@ class Database:
             " GROUP BY 1 ORDER BY users DESC LIMIT ?", (limit,))
 
     async def update_product(self, product_id: int, field: str, value: Any) -> None:
-        if field not in {"title", "description", "price", "channel_id", "access_text"}:
+        if field not in {"title", "description", "price", "channel_id", "access_text",
+                         "cover_file_id", "features", "guarantee", "preview_url", "seats"}:
             raise ValueError(field)
         await self._exec(f"UPDATE products SET {field}=? WHERE id=?", (value, product_id))
