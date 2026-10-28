@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>بازگشت به ربات</title>
+<style>
+  body{font-family:Tahoma,sans-serif;text-align:center;padding:14vh 16px;background:#fff;color:#111}
+  a{display:inline-block;margin-top:24px;padding:12px 24px;background:#2a9df4;color:#fff;border-radius:8px;text-decoration:none}
+  @media (prefers-color-scheme:dark){body{background:#111;color:#eee}}
+</style>
+</head>
+<body>
+<h2>در حال بازگشت به ربات…</h2>
+<p>اگر خودکار باز نشد، دکمه زیر را بزن.</p>
+<a id="go" href="#">باز کردن ربات</a>
+<script>
+  // مسیر: /pay/<bot_username>?Authority=...&Status=OK
+  // Status عمداً نادیده گرفته می‌شود؛ ربات پرداخت را مستقیم از زرین‌پال تایید می‌کند.
+  var bot = (location.pathname.split('/').filter(Boolean)[1] || '').replace(/[^A-Za-z0-9_]/g, '');
+  var auth = (new URLSearchParams(location.search).get('Authority') || '').replace(/[^A-Za-z0-9]/g, '');
+  var url = bot ? 'https://t.me/' + bot + (auth ? '?start=v_' + auth : '') : '#';
+  document.getElementById('go').href = url;
+  if (bot) location.replace(url);
+</script>
+</body>
+</html>

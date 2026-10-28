@@ -1,0 +1,14 @@
+{
+  "name": "course-sales-bot-serverless",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "deploy": "tgcloud push",
+    "status": "tgcloud status",
+    "migrate": "tgcloud migrate",
+    "check": "node scripts/check.mjs && node --test test/*.test.js"
+  },
+  "devDependencies": {
+    "@tgcloud/cli": "*"
+  }
+}

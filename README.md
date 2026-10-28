@@ -32,6 +32,9 @@ python -m bot.main
 ### تحویل با لینک کانال
 ربات را **ادمین** کانال/گروه خصوصی دوره کنید (با دسترسی دعوت کاربر). آیدی عددی کانال (مثل `-100…`) را هنگام ساخت محصول وارد کنید.
 
+## حالت سرورلس
+نسخه‌ی بدون سرور روی Telegram Serverless در پوشه‌ی [`serverless/`](serverless/README.md) است.
+
 ## تست
 ```bash
 pip install -r requirements-dev.txt
