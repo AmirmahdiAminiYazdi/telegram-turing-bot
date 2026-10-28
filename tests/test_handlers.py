@@ -1,56 +1,250 @@
-"""مسیر واقعی dispatcher (فیلتر ادمین، تزریق وابستگی‌ها) با Bot جعلی."""
+"""مسیرهای واقعی dispatcher (فیلترها، FSM، middlewareها) با Bot جعلی."""
 from datetime import datetime
 
 import pytest
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.methods import TelegramMethod
-from aiogram.types import Chat, Message, Update, User
+from aiogram.methods import (AnswerCallbackQuery, CopyMessage, EditMessageCaption,
+                             EditMessageText, GetChatMember, GetMe, SendPhoto)
+from aiogram.types import (CallbackQuery, Chat, ChatMemberLeft, ChatMemberMember,
+                           Message, MessageId, PhotoSize, Update, User)
 
 from bot.config import Settings
 from bot.db import Database
-from bot.handlers import admin, user
+from bot.handlers import admin, admin_more, user
+from bot.middlewares import ForceSub, Throttle
+
+ADMIN, BUYER = 99, 7
 
 
 class FakeBot(Bot):
     def __init__(self):
         super().__init__("123456:TEST")
-        self.sent: list[tuple[str, dict]] = []
+        self.calls: list[tuple[str, dict]] = []
+        self.member_status = "member"
 
-    async def __call__(self, method: TelegramMethod, request_timeout=None):
-        self.sent.append((type(method).__name__, method.model_dump()))
+    async def __call__(self, method, request_timeout=None):
+        name = type(method).__name__
+        self.calls.append((name, method.model_dump()))
+        if isinstance(method, GetMe):
+            return User(id=1, is_bot=True, first_name="Bot", username="mybot")
+        if isinstance(method, GetChatMember):
+            u = User(id=method.user_id, is_bot=False, first_name="x")
+            return (ChatMemberMember(user=u) if self.member_status == "member"
+                    else ChatMemberLeft(user=u))
+        if isinstance(method, CopyMessage):
+            return MessageId(message_id=500)
+        if isinstance(method, (EditMessageText, EditMessageCaption, AnswerCallbackQuery)):
+            return True
         return Message(message_id=1, date=datetime.now(), chat=Chat(id=1, type="private"))
+
+    def texts(self, chat_id=None) -> list[str]:
+        return [str(p.get("text") or p.get("caption")) for n, p in self.calls
+                if n in {"SendMessage", "EditMessageText", "SendPhoto", "EditMessageCaption"}
+                and (chat_id is None or p.get("chat_id") == chat_id)]
+
+    def alerts(self) -> list[str]:
+        return [str(p.get("text")) for n, p in self.calls if n == "AnswerCallbackQuery" and p.get("text")]
 
 
 @pytest.fixture
 async def ctx():
     db = Database(":memory:")
     await db.connect()
-    settings = Settings(bot_token="x", admin_ids=frozenset({99}), card_number="6037")
+    settings = Settings(bot_token="x", admin_ids=frozenset({ADMIN}), card_number="6037-1234",
+                        card_holder="Ali", support_username="sup")
     dp = Dispatcher(storage=MemoryStorage(), db=db, settings=settings, zarinpal=None)
     dp.include_router(admin.router)
+    dp.include_router(admin_more.router)
     dp.include_router(user.router)
     bot = FakeBot()
-    yield dp, bot, db
+    c = type("Ctx", (), {})()
+    c.dp, c.bot, c.db, c.settings, c.n = dp, bot, db, settings, 0
+    yield c
     await db.close()
 
 
-def _msg(uid: int, text: str, n: int = 1) -> Update:
-    return Update(update_id=n, message=Message(
-        message_id=n, date=datetime.now(), chat=Chat(id=uid, type="private"),
-        from_user=User(id=uid, is_bot=False, first_name="T"), text=text,
-        entities=[{"type": "bot_command", "offset": 0, "length": len(text.split()[0])}]
-        if text.startswith("/") else None))
+def _entities(text):
+    return ([{"type": "bot_command", "offset": 0, "length": len(text.split()[0])}]
+            if text.startswith("/") else None)
 
 
-async def test_start_and_admin_gate(ctx):
-    # روترها singleton ماژول‌اند و فقط یک‌بار به Dispatcher وصل می‌شوند؛ پس یک تست.
-    dp, bot, db = ctx
-    await dp.feed_update(bot, _msg(7, "/start ad_instagram"))
-    assert bot.sent[-1][0] == "SendMessage"
-    assert (await db._one("SELECT source FROM users WHERE id=7"))["source"] == "ad_instagram"
+async def say(c, uid, text):
+    c.n += 1
+    u = User(id=uid, is_bot=False, first_name="T", username=f"u{uid}")
+    msg = Message(message_id=c.n, date=datetime.now(), chat=Chat(id=uid, type="private"),
+                  from_user=u, text=text, entities=_entities(text))
+    await c.dp.feed_update(c.bot, Update(update_id=c.n, message=msg))
 
-    await dp.feed_update(bot, _msg(7, "/admin", 2))  # کاربر عادی
-    assert not any("پنل ادمین" in str(m[1].get("text")) for m in bot.sent)
-    await dp.feed_update(bot, _msg(99, "/admin", 3))  # ادمین
-    assert any("پنل ادمین" in str(m[1].get("text")) for m in bot.sent)
+
+async def photo(c, uid):
+    c.n += 1
+    u = User(id=uid, is_bot=False, first_name="T")
+    msg = Message(message_id=c.n, date=datetime.now(), chat=Chat(id=uid, type="private"),
+                  from_user=u, photo=[PhotoSize(file_id="F", file_unique_id="U", width=1, height=1)])
+    await c.dp.feed_update(c.bot, Update(update_id=c.n, message=msg))
+
+
+async def tap(c, uid, data, caption=None):
+    c.n += 1
+    u = User(id=uid, is_bot=False, first_name="T")
+    host = Message(message_id=c.n, date=datetime.now(), chat=Chat(id=uid, type="private"),
+                   from_user=User(id=1, is_bot=True, first_name="B"),
+                   text=None if caption else "menu", caption=caption)
+    cb = CallbackQuery(id=str(c.n), from_user=u, chat_instance="x", message=host, data=data)
+    await c.dp.feed_update(c.bot, Update(update_id=c.n, callback_query=cb))
+
+
+async def _product(c, price=100_000):
+    pid = await c.db.add_product("دوره‌ی تست", "توضیح", price, None, "LINK-123")
+    return pid
+
+
+async def test_start_registers_user_and_admin_gate(ctx):
+    await say(ctx, BUYER, "/start ad_instagram")
+    assert (await ctx.db._one("SELECT source FROM users WHERE id=?", (BUYER,)))["source"] == "ad_instagram"
+    await say(ctx, BUYER, "/admin")
+    assert not any("پنل ادمین" in t for t in ctx.bot.texts(BUYER))
+    await say(ctx, ADMIN, "/admin")
+    assert any("پنل ادمین" in t for t in ctx.bot.texts(ADMIN))
+
+
+async def test_card_purchase_with_discount_end_to_end(ctx):
+    pid = await _product(ctx)
+    await ctx.db.create_discount("HALF", "percent", 50)
+    await say(ctx, BUYER, "/start")
+    await tap(ctx, BUYER, f"buy:{pid}")
+    await tap(ctx, BUYER, f"disc:{pid}")
+    await say(ctx, BUYER, "half")
+    assert any("50,000" in t for t in ctx.bot.texts(BUYER))  # قیمت جدید نمایش داده شد
+    await tap(ctx, BUYER, f"pay:c:{pid}")
+    order = await ctx.db._one("SELECT * FROM orders")
+    assert order["amount"] == 50_000 and order["original_amount"] == 100_000
+    assert order["discount_code"] == "HALF"
+    assert (await ctx.db.get_discount("HALF"))["used"] == 1
+
+    await photo(ctx, BUYER)
+    assert any(n == "SendPhoto" and p["chat_id"] == ADMIN for n, p in ctx.bot.calls)
+    await tap(ctx, ADMIN, f"adm:ok:{order['id']}", caption="رسید")
+    assert (await ctx.db.get_order(order["id"]))["status"] == "paid"
+    assert any("LINK-123" in t for t in ctx.bot.texts(BUYER))
+    await tap(ctx, ADMIN, f"adm:ok:{order['id']}", caption="رسید")  # دوبار کلیک
+    assert sum("LINK-123" in t for t in ctx.bot.texts(BUYER)) == 1
+
+
+async def test_invalid_discount_keeps_state_and_cancel_exits(ctx):
+    pid = await _product(ctx)
+    await say(ctx, BUYER, "/start")
+    await tap(ctx, BUYER, f"disc:{pid}")
+    await say(ctx, BUYER, "WRONG")
+    assert any("معتبر نیست" in t for t in ctx.bot.texts(BUYER))
+    await say(ctx, BUYER, "/cancel")
+    assert any("لغو شد" in t for t in ctx.bot.texts(BUYER))
+
+
+async def test_free_order_with_full_discount(ctx):
+    pid = await _product(ctx)
+    await ctx.db.create_discount("FREE", "percent", 100)
+    await say(ctx, BUYER, "/start")
+    await tap(ctx, BUYER, f"disc:{pid}")
+    await say(ctx, BUYER, "FREE")
+    await tap(ctx, BUYER, f"pay:c:{pid}")
+    order = await ctx.db._one("SELECT * FROM orders")
+    assert order["status"] == "paid" and order["amount"] == 0
+    assert any("LINK-123" in t for t in ctx.bot.texts(BUYER))
+
+
+async def test_rejected_order_releases_discount(ctx):
+    pid = await _product(ctx)
+    await ctx.db.create_discount("ONE", "fixed", 1000, max_uses=1)
+    await say(ctx, BUYER, "/start")
+    await tap(ctx, BUYER, f"disc:{pid}")
+    await say(ctx, BUYER, "ONE")
+    await tap(ctx, BUYER, f"pay:c:{pid}")
+    await photo(ctx, BUYER)
+    oid = (await ctx.db._one("SELECT id FROM orders"))["id"]
+    await tap(ctx, ADMIN, f"adm:no:{oid}", caption="رسید")
+    assert (await ctx.db.get_discount("ONE"))["used"] == 0
+
+
+async def test_referral_link_and_reward_flow(ctx):
+    pid = await _product(ctx)
+    await say(ctx, 55, "/start")  # معرف
+    await say(ctx, BUYER, "/start ref_55")
+    assert (await ctx.db.get_referral(BUYER))["referrer_id"] == 55
+    await say(ctx, 66, "/start ref_55")
+    await say(ctx, BUYER, "/start ref_66")  # کاربر قدیمی: معرف عوض نمی‌شود
+    assert (await ctx.db.get_referral(BUYER))["referrer_id"] == 55
+
+    await tap(ctx, BUYER, f"pay:c:{pid}")
+    oid = (await ctx.db._one("SELECT id FROM orders"))["id"]
+    await photo(ctx, BUYER)
+    await tap(ctx, ADMIN, f"adm:ok:{oid}", caption="x")
+    assert any("REF-" in t for t in ctx.bot.texts(55))
+
+
+async def test_support_relay_roundtrip(ctx):
+    await say(ctx, BUYER, "/start")
+    await tap(ctx, BUYER, "support:msg")
+    await say(ctx, BUYER, "سلام، سوال دارم")
+    copied = [p for n, p in ctx.bot.calls if n == "CopyMessage"]
+    assert copied and copied[0]["chat_id"] == ADMIN
+    # ادمین روی پیام کپی‌شده (آیدی ۵۰۰) Reply می‌زند
+    ctx.n += 1
+    admin_u = User(id=ADMIN, is_bot=False, first_name="A")
+    reply_to = Message(message_id=500, date=datetime.now(), chat=Chat(id=ADMIN, type="private"),
+                       from_user=User(id=1, is_bot=True, first_name="B"), text="سلام، سوال دارم")
+    msg = Message(message_id=ctx.n, date=datetime.now(), chat=Chat(id=ADMIN, type="private"),
+                  from_user=admin_u, text="جواب شما", reply_to_message=reply_to)
+    await ctx.dp.feed_update(ctx.bot, Update(update_id=ctx.n, message=msg))
+    assert any("جواب شما" in t for t in ctx.bot.texts(BUYER))
+
+
+async def test_force_sub_blocks_non_members_and_lets_members_in(ctx):
+    pid = await _product(ctx)
+    ctx.dp.message.outer_middleware(Throttle(0))
+    user.router.message.middleware(ForceSub())
+    user.router.callback_query.middleware(ForceSub())
+    await ctx.db.set_setting("force_channel", "@mychan")
+
+    ctx.bot.member_status = "left"
+    await say(ctx, BUYER, "/start")
+    assert any("عضو شو" in t for t in ctx.bot.texts(BUYER))
+    await tap(ctx, BUYER, "fs:check")
+    assert any("عضو نشده" in a for a in ctx.bot.alerts())
+    await tap(ctx, BUYER, f"buy:{pid}")  # دور زدن قفل با کالبک ممکن نیست
+    assert not any("روش پرداخت" in t for t in ctx.bot.texts(BUYER))
+
+    ctx.bot.member_status = "member"
+    await tap(ctx, BUYER, "fs:check")
+    assert any("خوش آمدی" in t for t in ctx.bot.texts(BUYER))
+    await say(ctx, ADMIN, "/start")  # ادمین هرگز قفل نمی‌شود
+    ctx.bot.member_status = "left"
+    await say(ctx, ADMIN, "/admin")
+    assert any("پنل ادمین" in t for t in ctx.bot.texts(ADMIN))
+
+
+async def test_throttle_drops_fast_repeats():
+    t = {"now": 0.0}
+    th = Throttle(1.0, clock=lambda: t["now"])
+    calls = []
+
+    async def handler(event, data):
+        calls.append(1)
+
+    u = User(id=5, is_bot=False, first_name="x")
+    data = {"event_from_user": u, "settings": Settings(bot_token="x")}
+    await th(handler, object(), data)
+    await th(handler, object(), data)  # بلافاصله -> حذف
+    t["now"] = 2.0
+    await th(handler, object(), data)
+    assert len(calls) == 2
+
+
+async def test_admin_set_command_validates(ctx):
+    await say(ctx, ADMIN, "/set referral_percent 150")
+    assert any("۰ تا ۱۰۰" in t for t in ctx.bot.texts(ADMIN))
+    await say(ctx, ADMIN, "/set referral_percent 25")
+    assert await ctx.db.get_setting("referral_percent") == "25"
+    await say(ctx, ADMIN, "/set force_channel @abc")
+    assert await ctx.db.get_setting("force_channel") == "@abc"

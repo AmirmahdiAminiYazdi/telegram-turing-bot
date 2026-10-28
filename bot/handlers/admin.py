@@ -15,17 +15,11 @@ from bot import keyboards as kb
 from bot import texts
 from bot.config import Settings
 from bot.db import Database
-from bot.services.delivery import deliver
+from bot.filters import IsAdmin
+from bot.services.fulfillment import complete_order
 
 log = logging.getLogger(__name__)
 router = Router(name="admin")
-
-
-class IsAdmin:
-    """فیلتر ساده: فقط ادمین‌های تعریف‌شده در ADMIN_IDS."""
-
-    def __call__(self, event: Message | CallbackQuery, settings: Settings) -> bool:
-        return event.from_user.id in settings.admin_ids
 
 
 router.message.filter(IsAdmin())
@@ -208,12 +202,9 @@ async def pending(cb: CallbackQuery, db: Database) -> None:
 
 @router.callback_query(F.data.startswith("adm:ok:"))
 async def approve(cb: CallbackQuery, db: Database, bot: Bot, settings: Settings) -> None:
-    order = await db.get_order(int(cb.data.split(":")[2]))
-    if not order or not await db.mark_paid(order["id"]):
+    if not await complete_order(bot, db, settings, int(cb.data.split(":")[2])):
         await cb.answer("قبلا بررسی شده است", show_alert=True)
         return
-    await bot.send_message(order["user_id"], texts.PAID_OK)
-    await deliver(bot, db, order, settings.admin_ids)
     await cb.message.edit_caption(caption=(cb.message.caption or "") + "\n\n✅ تایید شد")
     await cb.answer()
 
@@ -224,6 +215,8 @@ async def reject(cb: CallbackQuery, db: Database, bot: Bot) -> None:
     if not order or not await db.reject_order(order["id"]):
         await cb.answer("قبلا بررسی شده است", show_alert=True)
         return
+    if order["discount_code"]:
+        await db.release_discount(order["discount_code"])  # ظرفیت کد برگردد
     await bot.send_message(order["user_id"], texts.REJECTED.format(order_id=order["id"]))
     await cb.message.edit_caption(caption=(cb.message.caption or "") + "\n\n❌ رد شد")
     await cb.answer()
@@ -234,11 +227,16 @@ async def reject(cb: CallbackQuery, db: Database, bot: Bot) -> None:
 async def stats(cb: CallbackQuery, db: Database) -> None:
     s = await db.stats()
     rate = f"{s['paid'] / s['orders'] * 100:.0f}%" if s["orders"] else "—"
-    await cb.message.edit_text(
-        f"👥 کاربران: {s['users']}\n🛒 سفارش‌ها: {s['orders']}\n"
-        f"✅ پرداخت‌شده: {s['paid']} (نرخ تبدیل {rate})\n"
-        f"💰 درآمد: {kb.fmt_price(s['revenue'])} تومان",
-        reply_markup=kb.admin_menu())
+    lines = [
+        f"👥 کاربران: {s['users']}", f"🛒 سفارش‌ها: {s['orders']}",
+        f"✅ پرداخت‌شده: {s['paid']} (نرخ تبدیل {rate})",
+        f"💰 درآمد کل: {kb.fmt_price(s['revenue'])} تومان",
+        f"📅 ۷ روز اخیر: {kb.fmt_price(await db.revenue_since(7))} تومان",
+        "", "<b>منبع ورود (کاربر / خرید):</b>",
+    ]
+    for r in await db.sources_report():
+        lines.append(f"• {escape(r['source'])}: {r['users']} / {r['paid']}")
+    await cb.message.edit_text("\n".join(lines), reply_markup=kb.admin_menu())
     await cb.answer()
 
 

@@ -8,7 +8,7 @@ from aiohttp import web
 from bot import texts
 from bot.config import Settings
 from bot.db import Database
-from bot.services.delivery import deliver
+from bot.services.fulfillment import complete_order
 from bot.services.zarinpal import Zarinpal, ZarinpalError
 
 log = logging.getLogger(__name__)
@@ -58,12 +58,7 @@ async def callback(request: web.Request) -> web.Response:
     if ref_id is None:
         return _page(False, username)
 
-    if await db.mark_paid(order["id"], ref_id):  # فقط یک‌بار تحویل
-        try:
-            await bot.send_message(order["user_id"], texts.PAID_OK)
-            await deliver(bot, db, order, settings.admin_ids)
-        except Exception:
-            log.exception("delivery failed for order %s", order["id"])
+    await complete_order(bot, db, settings, order["id"], ref_id)  # فقط یک‌بار تحویل
     return _page(True, username)
 
 
