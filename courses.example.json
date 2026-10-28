@@ -1,0 +1,13 @@
+[
+  {
+    "title": "نام دوره",
+    "price": 1200000,
+    "description": "یک یا دو جمله درباره‌ی نتیجه‌ی مشخصی که دانشجو می‌گیرد.",
+    "features": ["۱۲ ساعت ویدیو", "پروژه‌ی عملی", "پشتیبانی تلگرامی"],
+    "guarantee": null,
+    "preview_url": "https://example.com/preview",
+    "channel_id": -1001234567890,
+    "access_text": null,
+    "seats": null
+  }
+]
