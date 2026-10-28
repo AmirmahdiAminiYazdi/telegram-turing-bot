@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from bot.db import Database
@@ -22,7 +22,7 @@ def price_after(discount: dict[str, Any], price: int) -> int:
 def _expired(expires_at: str | None) -> bool:
     if not expires_at:
         return False
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")  # هم‌فرمت datetime('now') در SQLite
+    now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")  # هم‌فرمت datetime('now') در SQLite
     return expires_at <= now
 
 

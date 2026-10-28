@@ -34,53 +34,65 @@
 - ضداسپم (فاصله‌ی حداقلی بین رویدادها)، مهاجرت نسخه‌دار دیتابیس، تحویل اتمیک و فقط یک‌بار
 - Docker، systemd، Caddy، اسکریپت پشتیبان‌گیری، CI گیت‌هاب
 
-## راه‌اندازی
+## استقرار روی سرور شخصی
+```bash
+git clone <مخزن> /opt/telegram-turing-bot && cd /opt/telegram-turing-bot
+sudo ./deploy/install.sh --firewall     # Docker، .env امن، ربات + پشتیبان‌گیر (+ Caddy/HTTPS با دامنه)
+```
+راهنمای کامل (اولین ادمین با `/claim`، زرین‌پال، آپدیت، بازیابی، عیب‌یابی): [`docs/DEPLOY.md`](docs/DEPLOY.md).
+
+اجرای محلی برای توسعه:
 ```bash
 pip install -r requirements.txt
-cp .env.example .env   # مقادیر را پر کنید
-set -a; source .env; set +a
-python -m bot.main
+cp .env.example .env   # BOT_TOKEN را پر کنید
+make run
 ```
-با Docker: `docker compose up -d --build`. نمونه‌ی فایل سرویس و Caddy در `deploy/` است.
 
 ### تنظیمات `.env`
 | متغیر | توضیح |
 |---|---|
-| `BOT_TOKEN` | از @BotFather |
-| `ADMIN_IDS` | آیدی عددی ادمین‌ها با کاما |
+| `BOT_TOKEN` | از @BotFather (فرمت بررسی می‌شود) |
+| `ADMIN_IDS` | آیدی‌های عددی با کاما؛ خالی = اولین ادمین با `/claim` |
 | `CARD_NUMBER` / `CARD_HOLDER` | فعال‌سازی کارت‌به‌کارت |
-| `ZARINPAL_MERCHANT_ID` + `PUBLIC_BASE_URL` | پرداخت آنلاین. آدرس باید HTTPS و عمومی باشد؛ مسیر بازگشت `/pay/callback` |
+| `ZARINPAL_MERCHANT_ID` + `PUBLIC_BASE_URL` | پرداخت آنلاین؛ آدرس HTTPS و عمومی، بازگشت از درگاه `/pay/callback` |
+| `DOMAIN` | دامنه‌ی Caddy برای HTTPS خودکار (فقط Docker) |
 | `ZARINPAL_SANDBOX` | `true` برای تست |
-| `SUPPORT_USERNAME` | یوزرنیم پشتیبانی (اختیاری؛ پیام‌رسانی داخل ربات بدون آن هم کار می‌کند) |
+| `SUPPORT_USERNAME` | یوزرنیم پشتیبانی (اختیاری) |
 
 ### تحویل با لینک کانال
-ربات را **ادمین** کانال/گروه خصوصی دوره کنید (با دسترسی دعوت کاربر و برای استرداد، مسدود کردن کاربر). آیدی عددی کانال (`-100…`) را هنگام ساخت محصول بدهید.
+ربات را **ادمین** کانال/گروه خصوصی دوره کنید (دعوت کاربر و برای استرداد، مسدود کردن). آیدی عددی کانال (`-100…`) را هنگام ساخت محصول بدهید.
 برای قفل عضویت هم ربات باید در کانال ادمین باشد؛ در غیر این صورت قفل برای جلوگیری از توقف فروش نادیده گرفته می‌شود.
+
+### وارد کردن دسته‌ای دوره‌ها
+`courses.example.json` را پر کنید و `python -m bot.tools.import_products courses.json` را اجرا کنید (با `--update` برای به‌روزرسانی).
 
 ## نکات عملیاتی
 - مبلغ‌ها **تومان** ذخیره می‌شوند؛ حداقل پرداخت آنلاین ۱٬۰۰۰ تومان است.
 - ظرفیت کد تخفیف هنگام ساخت سفارش رزرو می‌شود؛ با رد رسید برمی‌گردد. سفارشِ بدون پرداخت، ظرفیت را نگه می‌دارد.
 - استرداد فقط وضعیت و دسترسی را عوض می‌کند؛ پول را خودتان برگردانید.
-- پیام همگانی فعلاً با parse mode پیش‌فرض ربات (HTML) ارسال می‌شود؛ `<` و `&` را رعایت کنید.
-- حالت چندسرور/چندنمونه پشتیبانی نمی‌شود (SQLite و FSM در حافظه). برای پشتیبان‌گیری: `deploy/backup.sh`.
-
-## حالت سرورلس
-نسخه‌ی بدون سرور روی Telegram Serverless در [`serverless/`](serverless/README.md) است
-(هسته‌ی فروش؛ کد تخفیف، معرفی، یادآوری، قفل عضویت و پشتیبانی هنوز منتقل نشده‌اند).
+- پیام همگانی با parse mode پیش‌فرض ربات (HTML) ارسال می‌شود؛ `<` و `&` را رعایت کنید.
+- گفتگوهای نیمه‌کاره (FSM) در SQLite ذخیره می‌شوند و با ری‌استارت از بین نمی‌روند. اجرای چند نمونه‌ی هم‌زمان پشتیبانی نمی‌شود.
+- پشتیبان‌گیری خودکار روزانه (۱۴ نسخه) با بررسی integrity؛ خطاهای پیش‌بینی‌نشده به ادمین‌ها اعلان می‌شود (حداکثر هر ۵ دقیقه برای هر نوع خطا).
 
 ## تست
 ```bash
-pip install -r requirements-dev.txt
-pytest
+make install
+make lint        # ruff
+make test        # ~۱۰۶ تست
+make cov         # با گزارش پوشش (آستانه‌ی CI: ۸۸٪)
 ```
+تست‌ها شامل: مسیرهای پرداخت و تحویل اتمیک، کلاینت زرین‌پال در برابر درگاه جعلی، جریان‌های کامل کاربر/ادمین با همان
+سیم‌کشی تولید، راه‌اندازی `main`، FSM ماندگار، پشتیبان‌گیری، و بررسی ایستای Compose/Caddy/Dockerfile/اسکریپت نصب.
 
 ## ساختار
 ```
 bot/main.py            نقطه ورود (polling + سرور بازگشت درگاه + یادآوری)
-bot/handlers/          user.py، admin.py، admin_more.py
+bot/app.py             سیم‌کشی Dispatcher (تولید و تست یکی است)
+bot/handlers/          user، admin، admin_more، setup (/claim)
 bot/services/          zarinpal، delivery، fulfillment، discounts، reminders
 bot/middlewares.py     Throttle و ForceSub
 bot/db.py              SQLite + مهاجرت‌ها
-deploy/ Dockerfile ... زیرساخت
+deploy/                install.sh، Caddyfile، نمونه‌ی systemd
+docs/DEPLOY.md         راهنمای استقرار و عملیات
 .claude/skills/        اسکیل‌های نصب‌شده برای Claude Code (SOURCES.md)
 ```

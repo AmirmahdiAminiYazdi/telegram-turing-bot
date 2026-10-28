@@ -29,9 +29,9 @@ async def _product(db, price=100_000, **kw):
 # ---- migrations ----
 async def test_migrations_run_once_and_set_version(db):
     row = await db._one("PRAGMA user_version")
-    assert row["user_version"] == 3
+    assert row["user_version"] == 4
     await db._migrate()  # دوباره اجرا بی‌اثر است
-    assert (await db._one("PRAGMA user_version"))["user_version"] == 3
+    assert (await db._one("PRAGMA user_version"))["user_version"] == 4
 
 
 # ---- discounts ----
@@ -251,3 +251,13 @@ async def test_loyalty_offer_only_when_other_course_left(db):
     d = await db.get_discount(code)
     assert d["owner_id"] == 20 and d["max_uses"] == 1 and d["expires_at"]
     del b
+
+
+def test_parse_int_handles_persian_digits_and_separators():
+    from bot.utils import parse_int
+    assert parse_int("۱٬۲۰۰٬۰۰۰") == 1_200_000
+    assert parse_int("١٢٣،٤٥٦") == 123_456
+    assert parse_int("1,500 ") == 1500
+    assert parse_int("12 000") == 12_000
+    for bad in ("", "abc", "-5", "1.5", "۱۲a"):
+        assert parse_int(bad) is None

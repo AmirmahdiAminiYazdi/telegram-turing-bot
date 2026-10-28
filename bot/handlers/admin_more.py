@@ -19,6 +19,7 @@ from bot.db import Database
 from bot.filters import IsAdmin
 from bot.services.delivery import deliver
 from bot.services.fulfillment import REFERRAL_DEFAULT_PERCENT
+from bot.utils import parse_int
 
 log = logging.getLogger(__name__)
 router = Router(name="admin_more")
@@ -26,12 +27,7 @@ router.message.filter(IsAdmin())
 router.callback_query.filter(IsAdmin())
 
 SETTING_KEYS = {"force_channel", "force_channel_link", "referral_percent", "loyalty_percent"}
-_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
-
-
-def to_int(raw: str) -> int | None:
-    s = raw.translate(_DIGITS).replace(",", "").replace("،", "").strip()
-    return int(s) if s.isdigit() else None
+to_int = parse_int
 
 
 class NewDiscount(StatesGroup):

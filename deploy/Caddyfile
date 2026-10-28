@@ -1,0 +1,19 @@
+# فقط مسیرهای لازم عمومی‌اند: بازگشت از درگاه و سلامت سرویس. بقیه 404.
+{$DOMAIN} {
+	encode zstd gzip
+
+	@public path /pay/callback /health
+	handle @public {
+		reverse_proxy bot:8080
+	}
+	handle {
+		respond "not found" 404
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+		-Server
+	}
+}

@@ -5,7 +5,8 @@ import logging
 from html import escape
 
 from aiogram import Bot
-from aiogram.types import InlineKeyboardButton as Btn, InlineKeyboardMarkup as Kb
+from aiogram.types import InlineKeyboardButton as Btn
+from aiogram.types import InlineKeyboardMarkup as Kb
 
 from bot import keyboards as kb
 from bot import texts

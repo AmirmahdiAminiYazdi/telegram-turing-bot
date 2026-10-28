@@ -95,7 +95,15 @@ CREATE TABLE IF NOT EXISTS ratings (
 );
 """
 
-MIGRATIONS = {1: SCHEMA_V1, 2: SCHEMA_V2, 3: SCHEMA_V3}
+SCHEMA_V4 = """
+CREATE TABLE IF NOT EXISTS fsm (
+    key TEXT PRIMARY KEY,
+    state TEXT,
+    data TEXT NOT NULL DEFAULT '{}'
+);
+"""
+
+MIGRATIONS = {1: SCHEMA_V1, 2: SCHEMA_V2, 3: SCHEMA_V3, 4: SCHEMA_V4}
 
 # فیلدهای محاسبه‌شده: فروش واقعی، امتیاز واقعی و حراج فعال. هیچ عددی ساختگی نیست.
 PRODUCT_SELECT = """
@@ -498,3 +506,22 @@ class Database:
                          "cover_file_id", "features", "guarantee", "preview_url", "seats"}:
             raise ValueError(field)
         await self._exec(f"UPDATE products SET {field}=? WHERE id=?", (value, product_id))
+
+    # ---- fsm storage / health ----
+    async def fsm_get(self, key: str) -> dict[str, Any] | None:
+        return await self._one("SELECT state, data FROM fsm WHERE key=?", (key,))
+
+    async def fsm_put(self, key: str, state: str | None, data: str) -> None:
+        await self._exec(
+            "INSERT INTO fsm(key, state, data) VALUES(?,?,?)"
+            " ON CONFLICT(key) DO UPDATE SET state=excluded.state, data=excluded.data",
+            (key, state, data))
+
+    async def fsm_delete(self, key: str) -> None:
+        await self._exec("DELETE FROM fsm WHERE key=?", (key,))
+
+    async def ping(self) -> bool:
+        try:
+            return (await self._one("SELECT 1 AS ok"))["ok"] == 1
+        except Exception:
+            return False

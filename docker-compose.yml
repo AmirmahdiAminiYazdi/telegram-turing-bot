@@ -1,13 +1,59 @@
+# اجرا:  docker compose up -d --build            (فقط ربات + پشتیبان‌گیری)
+#        docker compose --profile https up -d    (با Caddy و HTTPS خودکار؛ DOMAIN را در .env بگذار)
+x-hardening: &hardening
+  restart: unless-stopped
+  read_only: true
+  tmpfs: [/tmp]
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "5" }
+
 services:
   bot:
+    <<: *hardening
     build: .
-    restart: unless-stopped
+    image: course-sales-bot:local
     env_file: .env
-    environment:
-      DB_PATH: /data/bot.sqlite3
     volumes:
       - bot-data:/data
-    ports:
-      - "127.0.0.1:8080:8080"   # callback زرین‌پال؛ پشت nginx/Caddy با HTTPS قرار بده
+    # callback زرین‌پال فقط از طریق Caddy می‌آید؛ برای دسترسی مستقیم بدون دامنه، این خط را باز کن:
+    # ports: ["8080:8080"]
+    expose: ["8080"]
+    mem_limit: 512m
+    pids_limit: 200
+
+  backup:
+    <<: *hardening
+    image: course-sales-bot:local
+    depends_on: [bot]
+    command: ["python", "-m", "bot.tools.backup", "--loop", "86400", "--keep", "14"]
+    healthcheck:
+      disable: true   # HEALTHCHECK ایمیج برای وب‌سرور ربات است، نه این سرویس
+    volumes:
+      - bot-data:/data:ro
+      - bot-backups:/backups
+    mem_limit: 128m
+
+  caddy:
+    profiles: ["https"]
+    image: caddy:2
+    restart: unless-stopped
+    depends_on: [bot]
+    ports: ["80:80", "443:443"]
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: ["no-new-privileges:true"]
+
 volumes:
   bot-data:
+  bot-backups:
+  caddy-data:
+  caddy-config:

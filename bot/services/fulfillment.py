@@ -4,7 +4,8 @@ import logging
 import secrets
 
 from aiogram import Bot
-from aiogram.types import InlineKeyboardButton as Btn, InlineKeyboardMarkup as Kb
+from aiogram.types import InlineKeyboardButton as Btn
+from aiogram.types import InlineKeyboardMarkup as Kb
 
 from bot import texts
 from bot.config import Settings

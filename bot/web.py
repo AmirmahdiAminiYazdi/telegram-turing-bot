@@ -35,9 +35,11 @@ async def callback(request: web.Request) -> web.Response:
     app = request.app
     db: Database = app["db"]
     bot: Bot = app["bot"]
-    zarinpal: Zarinpal = app["zarinpal"]
+    zarinpal: Zarinpal | None = app["zarinpal"]
     settings: Settings = app["settings"]
     username = app.get("bot_username", "")
+    if zarinpal is None:
+        return web.Response(status=404, text="not found")
 
     authority = request.query.get("Authority", "")
     order = await db.get_order_by_authority(authority) if authority else None
@@ -62,8 +64,9 @@ async def callback(request: web.Request) -> web.Response:
     return _page(True, username)
 
 
-async def health(_: web.Request) -> web.Response:
-    return web.Response(text="ok")
+async def health(request: web.Request) -> web.Response:
+    ok = await request.app["db"].ping()
+    return web.json_response({"ok": ok}, status=200 if ok else 503)
 
 
 def make_app(db: Database, bot: Bot, settings: Settings,

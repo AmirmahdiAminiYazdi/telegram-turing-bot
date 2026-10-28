@@ -1,4 +1,5 @@
-from aiogram.types import InlineKeyboardButton as Btn, InlineKeyboardMarkup as Kb
+from aiogram.types import InlineKeyboardButton as Btn
+from aiogram.types import InlineKeyboardMarkup as Kb
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 

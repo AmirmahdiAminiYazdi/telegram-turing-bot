@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from aiogram import BaseMiddleware, Bot
 from aiogram.types import CallbackQuery, Message, TelegramObject
-from aiogram.types import InlineKeyboardButton as Btn, InlineKeyboardMarkup as Kb
+from aiogram.types import InlineKeyboardButton as Btn
+from aiogram.types import InlineKeyboardMarkup as Kb
 
 from bot import texts
 from bot.config import Settings

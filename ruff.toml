@@ -1,0 +1,18 @@
+line-length = 120
+target-version = "py313"
+extend-exclude = [".claude", "serverless"]
+
+[lint]
+select = ["E", "F", "I", "B", "UP", "ASYNC", "S", "RUF"]
+ignore = [
+  "RUF001", "RUF002", "RUF003",  # متن فارسی/عربی در رشته و کامنت
+  "S101",                        # assert در تست
+  "S104", "S110",                # bind روی همه‌ی اینترفیس‌ها داخل کانتینر عمدی است؛ best-effort اعلان‌ها
+  "S608",                        # SQL: نام ستون‌ها لیست سفید دارند (update_product)
+  "B008",
+]
+
+[lint.per-file-ignores]
+"tests/*" = ["S", "RUF059", "RUF012", "E501", "B017"]
+"bot/db.py" = ["E501"]
+"bot/tools/*" = ["ASYNC230"]

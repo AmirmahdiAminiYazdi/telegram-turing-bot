@@ -17,6 +17,7 @@ from bot.config import Settings
 from bot.db import Database
 from bot.filters import IsAdmin
 from bot.services.fulfillment import complete_order
+from bot.utils import parse_int
 
 log = logging.getLogger(__name__)
 router = Router(name="admin")
@@ -138,12 +139,11 @@ async def new_desc(message: Message, state: FSMContext) -> None:
 
 @router.message(NewProduct.price, F.text)
 async def new_price(message: Message, state: FSMContext) -> None:
-    raw = message.text.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
-    raw = raw.replace(",", "").replace("،", "").strip()
-    if not raw.isdigit() or int(raw) <= 0:
+    price = parse_int(message.text)
+    if not price:
         await message.answer("عدد معتبر نیست؛ دوباره بفرست.")
         return
-    await state.update_data(price=int(raw))
+    await state.update_data(price=price)
     await state.set_state(NewProduct.channel)
     await message.answer(
         "آیدی عددی کانال/گروه خصوصی دوره (مثل <code>-1001234567890</code>)؟\n"
